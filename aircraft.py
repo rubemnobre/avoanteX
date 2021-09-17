@@ -37,6 +37,7 @@ class Surface:
                 self.sections = copy.deepcopy(sections)
         else:
             raise Exception("At least 2 sections are needed, got %d" % len(sections))
+        self.analyze_geometry()
 
     def chord(self, sb):
         for i in range(len(self.sections[:-1])):
@@ -131,3 +132,19 @@ class Surface:
         yac = scipy.integrate.quad(cma_y, -self.b/2, self.b/2)[0]/self.b
         zac = scipy.integrate.quad(cma_z, -self.b/2, self.b/2)[0]/self.b
         self.AC = (xac, yac, zac)
+
+    def avl_text(self, name, position, angle, discretization, component, height = None):
+        avl_coord = lambda v : (-v[0], v[1], -v[2]) # Attention to the fact that AVL uses x downstream (back), z up
+        text = '\n'
+        text += 'SURFACE\n'                     # Keyword
+        text += name + '\n'                   # Surface name
+        text += discretization + '\n'         # Discretization settings
+        text += 'ANGLE\n%.5f\n' % angle       # Surface Incidence
+        text += 'COMPONENT\n%d\n' % component # Index
+        text += 'TRANSLATE\n%.3f\t%.3f\t%.3f\n' % avl_coord(position)
+        for sec in self.sections:
+            text += 'SECTION\n'
+            text += '%.3f %.3f %.3f ' % avl_coord(sec[0]) # Coordenadas
+            text += '%.3f %.3f\n' % (sec[1], sec[2])
+            text += 'AFILE\n%s\n' % sec[3].path
+        return text
