@@ -1,20 +1,31 @@
 # Developed by Rubem Bezerra (rubemjrx@gmail.com) for Avoante Aeromec Aerodesign (aeromec@ufc.br)
 # x forward, y right, z down
+
 import numpy as np
 import scipy.integrate
-import copy
 
 class Aircraft:
     def __init__(self):
         return
 
 class Airfoil:
-    def __init__(self, name, path = None, ac = 0.25):
+    def __init__(self, name, path = None, ac = 0.25, ach = 0):
         self.name = name
         self.path = path
         self.ac = ac
+        self.ach = ach
     def __str__(self):
         return self.name
+
+class Section:
+    def __init__(self, pos, chord, ainc, airfoil : Airfoil):
+        self.pos = pos
+        self.chord = chord
+        self.ainc = ainc
+        self.airfoil = airfoil
+    def symmetric(self):
+        pos = (self.pos[0], -self.pos[1], self.pos[2])
+        return Section(pos, self.chord, self.ainc, self.airfoil)
 
 class Surface:
     # Sections is a list of tuples: ((leading edge coordinates x, y, z), chord, angle, airfoil), start from 0,0,0 if ysim
@@ -24,64 +35,61 @@ class Surface:
             if y_symmetry:
                 self.sections = []
                 zero = sections[0]
-                if zero[0][1] == 0:
+                if zero.pos[1] == 0:
                     sections.pop(0)
                 for sec in sections[::-1]:
-                    (x, y, z), c, i, a = copy.deepcopy(sec)
-                    self.sections.append(((x, -y, z), c, i, a))
+                    self.sections.append(sec.symmetric())
                 self.sections.append(zero)
-                for sec in sections:
-                    (x, y, z), c, i, a = copy.deepcopy(sec)
-                    self.sections.append(((x, y, z), c, i, a))
+                self.sections.extend(sections)
             else:
-                self.sections = copy.deepcopy(sections)
+                self.sections = sections
         else:
             raise Exception("At least 2 sections are needed, got %d" % len(sections))
         self.analyze_geometry()
 
     def chord(self, sb):
         for i in range(len(self.sections[:-1])):
-            if self.sections[i][0][1] <= sb and self.sections[i+1][0][1] >= sb:
-                y1 = self.sections[i][0][1]
-                y2 = self.sections[i+1][0][1]
+            if self.sections[i].pos[1] <= sb and self.sections[i+1].pos[1] >= sb:
+                y1 = self.sections[i].pos[1]
+                y2 = self.sections[i+1].pos[1]
 
-                c1 = self.sections[i][1]
-                c2 = self.sections[i+1][1]
+                c1 = self.sections[i].chord
+                c2 = self.sections[i+1].chord
                 return c1 + (c2-c1)*(sb-y1)/(y2-y1)
                 
         for i in range(len(self.sections[:-1])):
             if self.sections[i][0][2] <= sb and self.sections[i+1][0][2] >= sb:
-                z1 = self.sections[i][0][2]
-                z2 = self.sections[i+1][0][2]
+                z1 = self.sections[i].pos[2]
+                z2 = self.sections[i+1].pos[2]
 
-                c1 = self.sections[i][1]
-                c2 = self.sections[i+1][1]
+                c1 = self.sections[i].chord
+                c2 = self.sections[i+1].chord
                 return c1 + (c2-c1)*(sb-z1)/(z2-z1)
         return 0
     
     def ca(self, sb):
         for i in range(len(self.sections[:-1])):
             if self.sections[i][0][1] <= sb and self.sections[i+1][0][1] >= sb:
-                y1 = self.sections[i][0][1]
-                y2 = self.sections[i+1][0][1]
+                y1 = self.sections[i].pos[1]
+                y2 = self.sections[i+1].pos[1]
 
-                c1 = self.sections[i][1]
-                c2 = self.sections[i+1][1]
+                c1 = self.sections[i].chord
+                c2 = self.sections[i+1].chord
 
-                ac1 = self.sections[i][3].ac
-                ac2 = self.sections[i+1][3].ac
+                ac1 = self.sections[i].airfoil.ac
+                ac2 = self.sections[i+1].airfoil.ac
                 return (c1 + (c2-c1)*(sb-y1)/(y2-y1))*(ac1 + (ac2-ac1)*(sb-y1)/(y2-y1))
                 
         for i in range(len(self.sections[:-1])):
             if self.sections[i][0][2] <= sb and self.sections[i+1][0][2] >= sb:
-                z1 = self.sections[i][0][2]
-                z2 = self.sections[i+1][0][2]
+                z1 = self.sections[i].pos[2]
+                z2 = self.sections[i+1].pos[2]
 
-                c1 = self.sections[i][1]
-                c2 = self.sections[i+1][1]
+                c1 = self.sections[i].chord
+                c2 = self.sections[i+1].chord
 
-                ac1 = self.sections[i][3].ac
-                ac2 = self.sections[i+1][3].ac
+                ac1 = self.sections[i].airfoil.ac
+                ac2 = self.sections[i+1].airfoil.ac
                 return (c1 + (c2-c1)*(sb-z1)/(z2-z1))*(ac1 + (ac2-ac1)*(sb-z1)/(z2-z1))
         return 0
     
@@ -89,14 +97,14 @@ class Surface:
         x, y, z = 0, 0, 0
         for i in range(len(self.sections[:-1])):
             if self.sections[i][0][1] <= sb and self.sections[i+1][0][1] >= sb:
-                x1 = self.sections[i][0][0]
-                x2 = self.sections[i+1][0][0]
+                x1 = self.sections[i].pos[0]
+                x2 = self.sections[i+1].pos[0]
 
-                y1 = self.sections[i][0][1]
-                y2 = self.sections[i+1][0][1]
+                y1 = self.sections[i].pos[1]
+                y2 = self.sections[i+1].pos[1]
                 
-                z1 = self.sections[i][0][2]
-                z2 = self.sections[i+1][0][2]
+                z1 = self.sections[i].pos[2]
+                z2 = self.sections[i+1].pos[2]
                 x = x1 + (x2 - x1)*(sb - y1)/(y2 - y1)
                 y = sb
                 z = z1 + (z2 - z1)*(sb - y1)/(y2 - y1)
@@ -104,14 +112,14 @@ class Surface:
                 
         for i in range(len(self.sections[:-1])):
             if self.sections[i][0][2] <= sb and self.sections[i+1][0][2] >= sb:
-                x1 = self.sections[i][0][0]
-                x2 = self.sections[i+1][0][0]
-                
-                y1 = self.sections[i][0][1]
-                y2 = self.sections[i+1][0][1]
+                x1 = self.sections[i].pos[0]
+                x2 = self.sections[i+1].pos[0]
 
-                z1 = self.sections[i][0][2]
-                z2 = self.sections[i+1][0][2]
+                y1 = self.sections[i].pos[1]
+                y2 = self.sections[i+1].pos[1]
+                
+                z1 = self.sections[i].pos[2]
+                z2 = self.sections[i+1].pos[2]
                 x = x1 + (x2 - x1)*(sb - z1)/(z2 - z1)
                 y = y1 + (y2 - y1)*(sb - z1)/(z2 - z1)
                 z = sb
@@ -119,9 +127,9 @@ class Surface:
 
     def analyze_geometry(self):
         if self.vertical:
-            self.b = abs(self.sections[0][0][2] - self.sections[-1][0][2])
+            self.b = abs(self.sections[0].pos[2] - self.sections[-1].pos[2])
         else:
-            self.b = abs(self.sections[0][0][1] - self.sections[-1][0][1])
+            self.b = abs(self.sections[0].pos[1] - self.sections[-1].pos[1])
         self.c = scipy.integrate.quad(lambda y : self.chord(y)**2, -self.b/2, self.b/2)[0]/scipy.integrate.quad(self.chord, -self.b/2, self.b/2)[0]
         self.S = scipy.integrate.quad(self.chord, -self.b/2, self.b/2)[0]
         self.AR = self.b*self.b/self.S
@@ -144,7 +152,7 @@ class Surface:
         text += 'TRANSLATE\n%.3f\t%.3f\t%.3f\n' % avl_coord(position)
         for sec in self.sections:
             text += 'SECTION\n'
-            text += '%.3f %.3f %.3f ' % avl_coord(sec[0]) # Coordenadas
-            text += '%.3f %.3f\n' % (sec[1], sec[2])
-            text += 'AFILE\n%s\n' % sec[3].path
+            text += '%.3f %.3f %.3f ' % avl_coord(sec.pos) # Coordenadas
+            text += '%.3f %.3f\n' % (sec.chord, sec.ainc)
+            text += 'AFILE\n%s\n' % sec.airfoil.path
         return text
