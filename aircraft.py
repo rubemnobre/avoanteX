@@ -4,12 +4,58 @@
 import numpy as np
 import scipy.integrate
 
-class Aircraft:
+class Coefficients:
     def __init__(self):
-        return
+        self.CL = lambda a, b : 0
+        self.CY = lambda a, b : 0
+        self.CD = lambda a, b : 0
+
+        self.Cm = lambda a, b : 0
+        self.Cn = lambda a, b : 0
+        self.Cl = lambda a, b : 0
+        
+
+class Aircraft:
+    @classmethod
+    def from_params(cls, params):
+        new = cls('')
+        return new
+    
+    def __init__(self, name):
+        self.name = name
+        self.surfaces = []
+        self.ref_S = 1
+        self.ref_c = 1
+        self.ref_b = 1
+        self.mass = 0
+        self.CG = np.array([0, 0, 0])
+
+    def add_surface(self, surface, name, position, angle, group = 0, make_ref = False):
+        self.surfaces.append((surface, name, position, angle, group))
+        self.CG = (surface.mass*surface.CG + self.mass*self.CG)/(self.mass + surface.mass)
+        if make_ref:
+            self.ref_S = surface.S
+            self.ref_c = surface.c
+            self.ref_b = surface.b
+
+    def avl_text(self, ge_height = None):
+        avl_coord = lambda v : (-v[0], v[1], -v[2]) # Attention to the fact that AVL uses x downstream (back), z up
+        text = "1\n"
+        text += "0.0\n"
+        if ge_height == None:
+            text += "0 0 0.0\n"
+        else:
+            text += "0 1 %.3f\n" % -ge_height
+        text += "%.3f %.3f %.3f\n" % (self.ref_S, self.ref_c, self.ref_b)
+        text += "%.3f %.3f %.3f\n" % avl_coord(self.CG)
+        for s in self.surfaces:
+            text += s[0].avl_text(s[1], s[2], s[3], s[4])
+        text += "\nend\n"
+        return text
+
 
 class Airfoil:
-    def __init__(self, name, path = None, ac = 0.25, ach = 0):
+    def __init__(self, name: str, path = None, ac = 0.25, ach = 0):
         self.name = name
         self.path = path
         self.ac = ac
@@ -19,18 +65,25 @@ class Airfoil:
 
 class Section:
     def __init__(self, pos, chord, ainc, airfoil : Airfoil):
-        self.pos = pos
+        self.pos = np.array(pos)
         self.chord = chord
         self.ainc = ainc
         self.airfoil = airfoil
     def symmetric(self):
-        pos = (self.pos[0], -self.pos[1], self.pos[2])
+        pos = np.array([self.pos[0], -self.pos[1], self.pos[2]])
         return Section(pos, self.chord, self.ainc, self.airfoil)
 
 class Surface:
     # Sections is a list of tuples: ((leading edge coordinates x, y, z), chord, angle, airfoil), start from 0,0,0 if ysim
-    def __init__(self, sections, y_symmetry = False, vertical = False):
+    def __init__(self, sections, discretization = "10 1.0 15 -1.0",y_symmetry = False, vertical = False):
         self.vertical = vertical
+        self.discretization = discretization
+        self.controls = []
+        self.mass = 1
+        self.CG = [0, 0, 0]
+        self.coefficients = None
+        self.ydup = y_symmetry
+        self.original_sections = sections.copy()
         if len(sections) >= 2:
             if y_symmetry:
                 self.sections = []
@@ -58,7 +111,7 @@ class Surface:
                 return c1 + (c2-c1)*(sb-y1)/(y2-y1)
                 
         for i in range(len(self.sections[:-1])):
-            if self.sections[i][0][2] <= sb and self.sections[i+1][0][2] >= sb:
+            if self.sections[i].pos[2] <= sb and self.sections[i+1].pos[2] >= sb:
                 z1 = self.sections[i].pos[2]
                 z2 = self.sections[i+1].pos[2]
 
@@ -69,7 +122,7 @@ class Surface:
     
     def ca(self, sb):
         for i in range(len(self.sections[:-1])):
-            if self.sections[i][0][1] <= sb and self.sections[i+1][0][1] >= sb:
+            if self.sections[i].pos[1] <= sb and self.sections[i+1].pos[1] >= sb:
                 y1 = self.sections[i].pos[1]
                 y2 = self.sections[i+1].pos[1]
 
@@ -81,7 +134,7 @@ class Surface:
                 return (c1 + (c2-c1)*(sb-y1)/(y2-y1))*(ac1 + (ac2-ac1)*(sb-y1)/(y2-y1))
                 
         for i in range(len(self.sections[:-1])):
-            if self.sections[i][0][2] <= sb and self.sections[i+1][0][2] >= sb:
+            if self.sections[i].pos[2] <= sb and self.sections[i+1].pos[2] >= sb:
                 z1 = self.sections[i].pos[2]
                 z2 = self.sections[i+1].pos[2]
 
@@ -96,7 +149,7 @@ class Surface:
     def leading_edge(self, sb):
         x, y, z = 0, 0, 0
         for i in range(len(self.sections[:-1])):
-            if self.sections[i][0][1] <= sb and self.sections[i+1][0][1] >= sb:
+            if self.sections[i].pos[1] <= sb and self.sections[i+1].pos[1] >= sb:
                 x1 = self.sections[i].pos[0]
                 x2 = self.sections[i+1].pos[0]
 
@@ -111,7 +164,7 @@ class Surface:
                 return (x, y, z)
                 
         for i in range(len(self.sections[:-1])):
-            if self.sections[i][0][2] <= sb and self.sections[i+1][0][2] >= sb:
+            if self.sections[i].pos[2] <= sb and self.sections[i+1].pos[2] >= sb:
                 x1 = self.sections[i].pos[0]
                 x2 = self.sections[i+1].pos[0]
 
@@ -141,18 +194,23 @@ class Surface:
         zac = scipy.integrate.quad(cma_z, -self.b/2, self.b/2)[0]/self.b
         self.AC = (xac, yac, zac)
 
-    def avl_text(self, name, position, angle, discretization, component, height = None):
+    def avl_text(self, name, position, angle, component):
         avl_coord = lambda v : (-v[0], v[1], -v[2]) # Attention to the fact that AVL uses x downstream (back), z up
         text = '\n'
         text += 'SURFACE\n'                     # Keyword
         text += name + '\n'                   # Surface name
-        text += discretization + '\n'         # Discretization settings
+        text += self.discretization + '\n'         # Discretization settings
         text += 'ANGLE\n%.5f\n' % angle       # Surface Incidence
         text += 'COMPONENT\n%d\n' % component # Index
         text += 'TRANSLATE\n%.3f\t%.3f\t%.3f\n' % avl_coord(position)
-        for sec in self.sections:
+        if self.ydup:
+            text += 'YDUPLICATE\n0.0\n'
+        for sec in self.original_sections:
             text += 'SECTION\n'
             text += '%.3f %.3f %.3f ' % avl_coord(sec.pos) # Coordenadas
             text += '%.3f %.3f\n' % (sec.chord, sec.ainc)
             text += 'AFILE\n%s\n' % sec.airfoil.path
         return text
+    
+    def add_control(self, start, end, chord, multiplier):
+        pass
